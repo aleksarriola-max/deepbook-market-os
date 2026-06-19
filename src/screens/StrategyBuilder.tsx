@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
-import { usePoll } from '../lib/hooks'
+import { usePoll, useLoad } from '../lib/hooks'
+import { listItems, addItem, removeItem, type SavedItem } from '../lib/cloudState'
 import { indexer, mid, spreadBps } from '../lib/indexer'
 import { buildTouchModel, backtestLadder, expectedFillStats, type LadderBacktest } from '../lib/microstructure'
 import { useSession } from '../lib/session'
@@ -7,11 +8,9 @@ import { fmt, fmtPrice } from '../lib/format'
 import { Panel, Stat, Tag, Empty } from '../components/ui'
 import { buildIntentPlan, type IntentKind, type IntentPlan } from '../lib/strategy'
 
-interface SavedStrategy {
-  id: number
+interface TemplateData {
   pool: string
   plan: IntentPlan
-  createdAt: number
 }
 
 interface SweepRow {
@@ -36,7 +35,7 @@ const SWEEP_SKEW = [0, 0.4, 0.8]
  * benchmark, with the same touch criterion for consistency.
  */
 export function StrategyBuilder() {
-  const { pool } = useSession()
+  const { pool, address } = useSession()
   const ob = usePoll(() => indexer.orderbook(pool, 4), 4_000, [pool])
   const candles = usePoll(() => indexer.ohlcv(pool, '1h', 400), 60_000, [pool])
   const m = mid(ob.data)
@@ -47,7 +46,14 @@ export function StrategyBuilder() {
   const [rungs, setRungs] = useState(8)
   const [widthPct, setWidthPct] = useState(3)
   const [skew, setSkew] = useState(0.8)
-  const [saved, setSaved] = useState<SavedStrategy[]>([])
+  const [localSaved, setLocalSaved] = useState<SavedItem<TemplateData>[]>([])
+  const [refreshKey, setRefreshKey] = useState(0)
+  const cloudSaved = useLoad(
+    () => (address ? listItems<TemplateData>(address, 'template') : Promise.resolve(null)),
+    [address, refreshKey],
+  )
+  // Cloud sync is opt-in: no address set => behave exactly like before (local only).
+  const saved = address ? (cloudSaved.data ?? []) : localSaved
 
   const plan = useMemo(
     () =>
@@ -217,9 +223,14 @@ export function StrategyBuilder() {
           {plan && (
             <button
               className="btn"
-              onClick={() =>
-                setSaved((s) => [{ id: Date.now(), pool, plan, createdAt: Date.now() }, ...s])
-              }
+              onClick={async () => {
+                if (address) {
+                  await addItem<TemplateData>(address, 'template', { pool, plan })
+                  setRefreshKey((k) => k + 1)
+                } else {
+                  setLocalSaved((s) => [{ id: Date.now(), data: { pool, plan }, createdAt: Date.now() }, ...s])
+                }
+              }}
             >
               Save as template
             </button>
@@ -401,9 +412,15 @@ export function StrategyBuilder() {
         <Panel
           className="span-all"
           title="Saved strategy templates"
-          sub="Templates are reusable across pools and deployable through the desk's delegated accounts"
+          sub={
+            address
+              ? "Synced to this wallet address — reusable across pools, devices, and the desk's delegated accounts"
+              : "Templates are reusable across pools and deployable through the desk's delegated accounts (enter a wallet address in the sidebar to sync these across devices)"
+          }
         >
-          {saved.length === 0 ? (
+          {address && cloudSaved.error ? (
+            <Empty text={`couldn't reach saved data: ${cloudSaved.error}`} />
+          ) : saved.length === 0 ? (
             <Empty text="no templates yet — tune a ladder and save it" />
           ) : (
             <table className="tbl">
@@ -422,13 +439,25 @@ export function StrategyBuilder() {
                 {saved.map((s) => (
                   <tr key={s.id}>
                     <td>{new Date(s.createdAt).toLocaleTimeString()}</td>
-                    <td>{s.pool}</td>
-                    <td>{s.plan.label}</td>
-                    <td className="num">{s.plan.rungs.length}</td>
-                    <td className="num">{fmt(s.plan.rungs.reduce((a, r) => a + r.quantity, 0))}</td>
-                    <td className="num">{fmtPrice(s.plan.avgPrice)}</td>
+                    <td>{s.data.pool}</td>
+                    <td>{s.data.plan.label}</td>
+                    <td className="num">{s.data.plan.rungs.length}</td>
+                    <td className="num">{fmt(s.data.plan.rungs.reduce((a, r) => a + r.quantity, 0))}</td>
+                    <td className="num">{fmtPrice(s.data.plan.avgPrice)}</td>
                     <td>
-                      <Tag tone="info">ready to deploy</Tag>
+                      <button
+                        className="btn ghost"
+                        onClick={async () => {
+                          if (address) {
+                            await removeItem(s.id)
+                            setRefreshKey((k) => k + 1)
+                          } else {
+                            setLocalSaved((ls) => ls.filter((x) => x.id !== s.id))
+                          }
+                        }}
+                      >
+                        remove
+                      </button>
                     </td>
                   </tr>
                 ))}
