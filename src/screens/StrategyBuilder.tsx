@@ -48,6 +48,7 @@ export function StrategyBuilder() {
   const [skew, setSkew] = useState(0.8)
   const [localSaved, setLocalSaved] = useState<SavedItem<TemplateData>[]>([])
   const [refreshKey, setRefreshKey] = useState(0)
+  const [writeError, setWriteError] = useState<string | null>(null)
   const cloudSaved = useLoad(
     () => (address ? listItems<TemplateData>(address, 'template') : Promise.resolve(null)),
     [address, refreshKey],
@@ -225,8 +226,13 @@ export function StrategyBuilder() {
               className="btn"
               onClick={async () => {
                 if (address) {
-                  await addItem<TemplateData>(address, 'template', { pool, plan })
-                  setRefreshKey((k) => k + 1)
+                  try {
+                    await addItem<TemplateData>(address, 'template', { pool, plan })
+                    setWriteError(null)
+                    setRefreshKey((k) => k + 1)
+                  } catch (e) {
+                    setWriteError(e instanceof Error ? e.message : String(e))
+                  }
                 } else {
                   setLocalSaved((s) => [{ id: Date.now(), data: { pool, plan }, createdAt: Date.now() }, ...s])
                 }
@@ -418,51 +424,61 @@ export function StrategyBuilder() {
               : "Templates are reusable across pools and deployable through the desk's delegated accounts (enter a wallet address in the sidebar to sync these across devices)"
           }
         >
-          {address && cloudSaved.error ? (
+          {address && cloudSaved.error && !cloudSaved.data?.length ? (
             <Empty text={`couldn't reach saved data: ${cloudSaved.error}`} />
           ) : saved.length === 0 ? (
             <Empty text="no templates yet — tune a ladder and save it" />
           ) : (
-            <table className="tbl">
-              <thead>
-                <tr>
-                  <th>Created</th>
-                  <th>Pool</th>
-                  <th>Strategy</th>
-                  <th className="num">Rungs</th>
-                  <th className="num">Quantity</th>
-                  <th className="num">Avg price</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {saved.map((s) => (
-                  <tr key={s.id}>
-                    <td>{new Date(s.createdAt).toLocaleTimeString()}</td>
-                    <td>{s.data.pool}</td>
-                    <td>{s.data.plan.label}</td>
-                    <td className="num">{s.data.plan.rungs.length}</td>
-                    <td className="num">{fmt(s.data.plan.rungs.reduce((a, r) => a + r.quantity, 0))}</td>
-                    <td className="num">{fmtPrice(s.data.plan.avgPrice)}</td>
-                    <td>
-                      <button
-                        className="btn ghost"
-                        onClick={async () => {
-                          if (address) {
-                            await removeItem(s.id)
-                            setRefreshKey((k) => k + 1)
-                          } else {
-                            setLocalSaved((ls) => ls.filter((x) => x.id !== s.id))
-                          }
-                        }}
-                      >
-                        remove
-                      </button>
-                    </td>
+            <>
+              {writeError && (
+                <p className="note" style={{ color: 'var(--down)' }}>{writeError}</p>
+              )}
+              <table className="tbl">
+                <thead>
+                  <tr>
+                    <th>Created</th>
+                    <th>Pool</th>
+                    <th>Strategy</th>
+                    <th className="num">Rungs</th>
+                    <th className="num">Quantity</th>
+                    <th className="num">Avg price</th>
+                    <th></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {saved.map((s) => (
+                    <tr key={s.id}>
+                      <td>{new Date(s.createdAt).toLocaleTimeString()}</td>
+                      <td>{s.data.pool}</td>
+                      <td>{s.data.plan.label}</td>
+                      <td className="num">{s.data.plan.rungs.length}</td>
+                      <td className="num">{fmt(s.data.plan.rungs.reduce((a, r) => a + r.quantity, 0))}</td>
+                      <td className="num">{fmtPrice(s.data.plan.avgPrice)}</td>
+                      <td>
+                        <button
+                          className="btn ghost"
+                          onClick={async () => {
+                            if (address) {
+                              try {
+                                await removeItem(s.id)
+                                setWriteError(null)
+                                setRefreshKey((k) => k + 1)
+                              } catch (e) {
+                                setWriteError(e instanceof Error ? e.message : String(e))
+                              }
+                            } else {
+                              setLocalSaved((ls) => ls.filter((x) => x.id !== s.id))
+                            }
+                          }}
+                        >
+                          remove
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
           )}
         </Panel>
       </div>

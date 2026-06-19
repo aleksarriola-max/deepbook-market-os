@@ -81,6 +81,7 @@ export function Predict() {
   const [side, setSide] = useState<'call' | 'put'>('call')
   const [localPositions, setLocalPositions] = useState<SavedItem<PositionData>[]>([])
   const [refreshKey, setRefreshKey] = useState(0)
+  const [writeError, setWriteError] = useState<string | null>(null)
   const cloudPositions = useLoad(
     () => (address ? listItems<PositionData>(address, 'predict_position') : Promise.resolve(null)),
     [address, refreshKey],
@@ -90,8 +91,13 @@ export function Predict() {
 
   const addPosition = async (data: PositionData) => {
     if (address) {
-      await addItem<PositionData>(address, 'predict_position', data)
-      setRefreshKey((k) => k + 1)
+      try {
+        await addItem<PositionData>(address, 'predict_position', data)
+        setWriteError(null)
+        setRefreshKey((k) => k + 1)
+      } catch (e) {
+        setWriteError(e instanceof Error ? e.message : String(e))
+      }
     } else {
       setLocalPositions((p) => [...p, { id: Date.now(), data, createdAt: Date.now() }])
     }
@@ -99,8 +105,13 @@ export function Predict() {
 
   const closePosition = async (id: number) => {
     if (address) {
-      await removeItem(id)
-      setRefreshKey((k) => k + 1)
+      try {
+        await removeItem(id)
+        setWriteError(null)
+        setRefreshKey((k) => k + 1)
+      } catch (e) {
+        setWriteError(e instanceof Error ? e.message : String(e))
+      }
     } else {
       setLocalPositions((p) => p.filter((x) => x.id !== id))
     }
@@ -389,49 +400,54 @@ export function Predict() {
               : 'Positions accumulate here for the hedging engine on the Portfolio screen (enter a wallet address in the sidebar to sync these across devices)'
           }
         >
-          {address && cloudPositions.error ? (
+          {address && cloudPositions.error && !cloudPositions.data?.length ? (
             <Empty text={`couldn't reach saved data: ${cloudPositions.error}`} />
           ) : positions.length ? (
-            <table className="tbl">
-              <thead>
-                <tr>
-                  <th>Market</th>
-                  <th>Side</th>
-                  <th className="num">Entry</th>
-                  <th className="num">Size ($ payout)</th>
-                  <th className="num">Max loss</th>
-                  <th className="num">Max gain</th>
-                  <th className="num">Delta ($/Δ1 spot)</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {positions.map((item) => {
-                  const p = item.data
-                  const sigma = pricingVol(p.days)
-                  const callDelta = spot > 0 ? binaryDelta(spot, p.strike, sigma, p.days, p.isCall) : 0
-                  const posDelta = (p.side === 'YES' ? callDelta : -callDelta) * p.size
-                  return (
-                    <tr key={item.id}>
-                      <td>{p.market}</td>
-                      <td>
-                        <Tag tone={p.side === 'YES' ? 'live' : 'warn'}>{p.side}</Tag>
-                      </td>
-                      <td className="num">{(p.price * 100).toFixed(1)}¢</td>
-                      <td className="num">${p.size}</td>
-                      <td className="num tone-down">-${(p.price * p.size).toFixed(0)}</td>
-                      <td className="num tone-up">+${((1 - p.price) * p.size).toFixed(0)}</td>
-                      <td className={`num tone-${posDelta >= 0 ? 'up' : 'down'}`}>{posDelta.toFixed(2)}</td>
-                      <td>
-                        <button className="btn ghost" onClick={() => closePosition(item.id)}>
-                          close
-                        </button>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+            <>
+              {writeError && (
+                <p className="note" style={{ color: 'var(--down)' }}>{writeError}</p>
+              )}
+              <table className="tbl">
+                <thead>
+                  <tr>
+                    <th>Market</th>
+                    <th>Side</th>
+                    <th className="num">Entry</th>
+                    <th className="num">Size ($ payout)</th>
+                    <th className="num">Max loss</th>
+                    <th className="num">Max gain</th>
+                    <th className="num">Delta ($/Δ1 spot)</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {positions.map((item) => {
+                    const p = item.data
+                    const sigma = pricingVol(p.days)
+                    const callDelta = spot > 0 ? binaryDelta(spot, p.strike, sigma, p.days, p.isCall) : 0
+                    const posDelta = (p.side === 'YES' ? callDelta : -callDelta) * p.size
+                    return (
+                      <tr key={item.id}>
+                        <td>{p.market}</td>
+                        <td>
+                          <Tag tone={p.side === 'YES' ? 'live' : 'warn'}>{p.side}</Tag>
+                        </td>
+                        <td className="num">{(p.price * 100).toFixed(1)}¢</td>
+                        <td className="num">${p.size}</td>
+                        <td className="num tone-down">-${(p.price * p.size).toFixed(0)}</td>
+                        <td className="num tone-up">+${((1 - p.price) * p.size).toFixed(0)}</td>
+                        <td className={`num tone-${posDelta >= 0 ? 'up' : 'down'}`}>{posDelta.toFixed(2)}</td>
+                        <td>
+                          <button className="btn ghost" onClick={() => closePosition(item.id)}>
+                            close
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </>
           ) : (
             <Empty text="no positions — buy YES/NO above" />
           )}
