@@ -1,15 +1,23 @@
 # DeepBook Market OS
 
+**Live: https://aleksarriola-max.github.io/deepbook-market-os/**
+
 A builder console for DeepBookV3 on Sui — one operating layer over Spot, Margin
 and Predict. Every screen reads **live data from the public DeepBookV3 mainnet
 indexer** (`https://deepbook-indexer.mainnet.mystenlabs.com`) and runs the same
 quant analytics that drive the strategy, execution and risk tooling.
 
-There is no backend: the app is a static Vite/React/TypeScript bundle. All
-analytics (TCA, Kyle's lambda, impact curves, touch-probability models,
-backtests, vol cones, route exploration) run client-side in
+The app itself has no backend: it's a static Vite/React/TypeScript bundle
+hosted on GitHub Pages, auto-deployed on every push to `main` via
+[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml). All analytics
+(TCA, Kyle's lambda, impact curves, touch-probability models, backtests, vol
+cones/smiles, route exploration) run client-side in
 [`src/lib/microstructure.ts`](src/lib/microstructure.ts) and
-[`src/lib/strategy.ts`](src/lib/strategy.ts) against indexer responses.
+[`src/lib/strategy.ts`](src/lib/strategy.ts) against indexer responses. The
+one piece of optional server-side state — saved strategy templates and
+Predict positions — is a single Supabase table the browser talks to directly
+(see [Cloud persistence](#cloud-persistence-optional) below); nothing else in
+the app depends on it.
 
 ## Quick start
 
@@ -31,19 +39,38 @@ In dev, requests to `/dbapi/*` are proxied to the mainnet indexer (see
 indexer's CORS policy changes. The client tries the direct indexer URL first
 and falls back to the proxy automatically (`src/lib/indexer.ts`).
 
+## Cloud persistence (optional)
+
+Strategy Builder's saved templates and Predict's YES/NO positions sync to a
+Supabase table when you type a wallet address into the sidebar field. With no
+address entered, both screens behave exactly as a pure client-side app
+(in-memory only, nothing leaves the browser) — cloud sync is opt-in, never
+required.
+
+This is **not** real wallet authentication — the address is typed, not
+signed, and the table's Row Level Security policy is intentionally permissive
+(everything stored is paper/simulated trading data, not real funds). See
+[`docs/superpowers/specs/2026-06-19-cloud-persistence-design.md`](docs/superpowers/specs/2026-06-19-cloud-persistence-design.md)
+for the full design rationale.
+
+To run this locally, copy `.env.example` to `.env.local` and set
+`VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` from a Supabase project where
+you've run the schema in that spec doc. Without these set, the app silently
+falls back to local-only behavior (see `src/lib/supabase.ts`).
+
 ## Screens
 
 | Screen | File | What it does |
 | --- | --- | --- |
 | Market Dashboard | `src/screens/Dashboard.tsx` | Live ticker across every DeepBookV3 pool: 24h volume, active pairs, trade count, 48h sparklines. |
 | Smart Execution Terminal | `src/screens/Terminal.tsx` | Live order book + candles; turns an intent ("accumulate", "exit", "breakout", "mean-revert") into a ladder of limit orders, staged as one atomic PTB, with a walk-the-book comparison vs crossing the spread now. |
-| Strategy Builder | `src/screens/StrategyBuilder.tsx` | Tunable ladder strategies against the live mid; expected fill rates from an empirical touch-probability model, and a backtest of the exact ladder shape over the pool's own OHLC history. |
-| Execution Analytics | `src/screens/Analytics.tsx` | Transaction-cost analysis on the live tape — effective/realized spread, price impact decomposition, Kyle's lambda, exact impact curves, and a multi-hop smart-route explorer. |
+| Strategy Builder | `src/screens/StrategyBuilder.tsx` | Tunable ladder strategies against the live mid; expected fill rates from an empirical touch-probability model, a backtest of the exact ladder shape over the pool's own OHLC history, and a **ladder sweep** that grid-searches 48 (rungs × width% × skew) combinations and ranks them by expected edge. Templates optionally sync to the cloud (see below). |
+| Execution Analytics | `src/screens/Analytics.tsx` | Transaction-cost analysis on the live tape — effective/realized spread, price impact decomposition, Kyle's lambda, exact impact curves, a **≤3-hop smart-route explorer**, and a **TCA time-series chart** plotting effective spread / price impact per trade. |
 | Desk Manager | `src/screens/DeskManager.tsx` | BalanceManager account model — paste any mainnet BalanceManager ID to see its open orders, volume and on-chain audit log; TradeCap delegation preview. |
 | Liquidity Vaults | `src/screens/Vault.tsx` | Maker leaderboard computed from live order/trade data, alongside illustrative vault strategies (target APR/TVL/utilization marked **SIMULATED**). |
-| Predict Workspace | `src/screens/Predict.tsx` | Prices binary event markets from live spot + realized vol via a lognormal stand-in for the Block Scholes oracle (Predict is testnet-only) — all values marked **SIMULATED**, with the d₁/N(d₁) formula shown inline. |
+| Predict Workspace | `src/screens/Predict.tsx` | Prices binary event markets from live spot + realized vol via a lognormal stand-in for the Block Scholes oracle (Predict is testnet-only) — all values marked **SIMULATED**, with the d₁/N(d₁) formula shown inline, plus an **empirical vol smile** (realized semivariance skew) and **binary option delta** shown per position. Positions optionally sync to the cloud (see below). |
 | Structured Products | `src/screens/Structured.tsx` | Compose payoffs from Spot/Margin/Predict legs; payoff curve recomputes live against the current mid, binary-leg premia marked **SIMULATED**. |
-| Portfolio Command | `src/screens/Portfolio.tsx` | Paste a wallet address to load real margin positions, collateral and LP supply from the indexer's `/portfolio` endpoint; stages leverage-defense and allocation-rotation actions. |
+| Portfolio Command | `src/screens/Portfolio.tsx` | Paste a wallet address to load real margin positions, collateral and LP supply from the indexer's `/portfolio` endpoint; stages leverage-defense and allocation-rotation actions; a **risk stress-test slider** recomputes each position's risk ratio under a hypothetical pool-price move and shows the exact % move to liquidation/warning thresholds. |
 | Market Creation Console | `src/screens/BuilderConsole.tsx` | Live `PoolCreated` feed from mainnet; generates the SDK snippet for permissionless pool creation and previews a flash-loan PTB to seed both sides of a new book. |
 
 ## Quant methodology
@@ -73,14 +100,17 @@ themselves — they call these functions with inputs from the polled indexer.
 - **`backtestLadder`** — replays an exact ladder shape over rolling OHLC
   windows vs the benchmark of crossing the spread immediately.
 - **`volCone`** — realized-volatility cone across horizons, from OHLC closes.
-- **`exploreRoutes`** — simulates every ≤2-hop path between two assets across
-  DeepBook's shared-liquidity pools, walking each leg's real book with taker
-  fees compounded per hop.
+- **`volSkew`** — realized semivariance (Barndorff-Nielsen) decomposition of
+  squared log-return deviations into downside/upside vol, used to build an
+  empirical vol smile instead of one flat ATM sigma per strike.
+- **`exploreRoutes`** — simulates every ≤3-hop path (up to two intermediate
+  assets) between two assets across DeepBook's shared-liquidity pools,
+  walking each leg's real book with taker fees compounded per hop.
 - **`buildIntentPlan`** — turns a high-level intent + ladder shape (rungs,
   width %, size skew) into concrete limit-order rungs.
-- **`binaryFairValue` / `legPayoff` / `productPayoff`** — lognormal d₁/N(d₁)
-  binary pricing (stand-in for Predict's Block Scholes oracle) and structured-
-  product payoff curves.
+- **`binaryFairValue` / `binaryDelta` / `legPayoff` / `productPayoff`** —
+  lognormal d₁/N(d₁) binary pricing and its analytic delta (stand-in for
+  Predict's Block Scholes oracle) and structured-product payoff curves.
 
 Numbers that aren't derived this way — Vault target APR/TVL/utilization and
 Predict/Structured binary fair values and premia — are estimates and always
