@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
-import { usePoll } from '../lib/hooks'
+import { usePoll, useLoad } from '../lib/hooks'
+import { listItems, addItem, removeItem, type SavedItem } from '../lib/cloudState'
 import { indexer, realizedVol, mid } from '../lib/indexer'
 import { volCone, volSkew } from '../lib/microstructure'
 import { useSession } from '../lib/session'
@@ -11,6 +12,16 @@ import { binaryFairValue, binaryDelta } from '../lib/strategy'
 // Strike offsets for the empirical vol smile, in % of spot.
 const SMILE_STRIKES_PCT = [-10, -7.5, -5, -2.5, 0, 2.5, 5, 7.5, 10]
 
+interface PositionData {
+  market: string
+  side: string
+  price: number
+  size: number
+  strike: number
+  days: number
+  isCall: boolean
+}
+
 /**
  * Layer 4 — DeepBook Predict workspace.
  * Predict (testnet, May 2026) brings binary options as the third primitive
@@ -19,7 +30,7 @@ const SMILE_STRIKES_PCT = [-10, -7.5, -5, -2.5, 0, 2.5, 5, 7.5, 10]
  * mainnet indexer; settlement plumbing arrives with Predict mainnet.
  */
 export function Predict() {
-  const { pool } = useSession()
+  const { pool, address } = useSession()
   const candles = usePoll(() => indexer.ohlcv(pool, '1h', 400), 30_000, [pool])
   const ob = usePoll(() => indexer.orderbook(pool, 4), 5_000, [pool])
 
@@ -68,9 +79,32 @@ export function Predict() {
   const [strikePct, setStrikePct] = useState(5)
   const [days, setDays] = useState(7)
   const [side, setSide] = useState<'call' | 'put'>('call')
-  const [positions, setPositions] = useState<
-    { market: string; side: string; price: number; size: number; strike: number; days: number; isCall: boolean }[]
-  >([])
+  const [localPositions, setLocalPositions] = useState<SavedItem<PositionData>[]>([])
+  const [refreshKey, setRefreshKey] = useState(0)
+  const cloudPositions = useLoad(
+    () => (address ? listItems<PositionData>(address, 'predict_position') : Promise.resolve(null)),
+    [address, refreshKey],
+  )
+  // Cloud sync is opt-in: no address set => behave exactly like before (local only).
+  const positions = address ? (cloudPositions.data ?? []) : localPositions
+
+  const addPosition = async (data: PositionData) => {
+    if (address) {
+      await addItem<PositionData>(address, 'predict_position', data)
+      setRefreshKey((k) => k + 1)
+    } else {
+      setLocalPositions((p) => [...p, { id: Date.now(), data, createdAt: Date.now() }])
+    }
+  }
+
+  const closePosition = async (id: number) => {
+    if (address) {
+      await removeItem(id)
+      setRefreshKey((k) => k + 1)
+    } else {
+      setLocalPositions((p) => p.filter((x) => x.id !== id))
+    }
+  }
 
   const strike = spot * (1 + (side === 'call' ? strikePct : -strikePct) / 100)
   const sigmaAnnual = pricingVol(days)
@@ -285,18 +319,15 @@ export function Predict() {
               className="btn buy"
               disabled={spot <= 0}
               onClick={() =>
-                setPositions((p) => [
-                  ...p,
-                  {
-                    market: `${pool.split('_')[0]} ${side === 'call' ? '≥' : '<'} ${fmtPrice(strike)} in ${days}d`,
-                    side: 'YES',
-                    price: fair,
-                    size: 100,
-                    strike,
-                    days,
-                    isCall: side === 'call',
-                  },
-                ])
+                addPosition({
+                  market: `${pool.split('_')[0]} ${side === 'call' ? '≥' : '<'} ${fmtPrice(strike)} in ${days}d`,
+                  side: 'YES',
+                  price: fair,
+                  size: 100,
+                  strike,
+                  days,
+                  isCall: side === 'call',
+                })
               }
             >
               Buy YES @ {(fair * 100).toFixed(1)}¢
@@ -305,18 +336,15 @@ export function Predict() {
               className="btn sell"
               disabled={spot <= 0}
               onClick={() =>
-                setPositions((p) => [
-                  ...p,
-                  {
-                    market: `${pool.split('_')[0]} ${side === 'call' ? '≥' : '<'} ${fmtPrice(strike)} in ${days}d`,
-                    side: 'NO',
-                    price: 1 - fair,
-                    size: 100,
-                    strike,
-                    days,
-                    isCall: side === 'call',
-                  },
-                ])
+                addPosition({
+                  market: `${pool.split('_')[0]} ${side === 'call' ? '≥' : '<'} ${fmtPrice(strike)} in ${days}d`,
+                  side: 'NO',
+                  price: 1 - fair,
+                  size: 100,
+                  strike,
+                  days,
+                  isCall: side === 'call',
+                })
               }
             >
               Buy NO @ {((1 - fair) * 100).toFixed(1)}¢
@@ -355,9 +383,15 @@ export function Predict() {
         <Panel
           className="span-all"
           title="Workspace positions (paper)"
-          sub="Positions accumulate here for the hedging engine on the Portfolio screen"
+          sub={
+            address
+              ? 'Synced to this wallet address — feeds the hedging engine on the Portfolio screen'
+              : 'Positions accumulate here for the hedging engine on the Portfolio screen (enter a wallet address in the sidebar to sync these across devices)'
+          }
         >
-          {positions.length ? (
+          {address && cloudPositions.error ? (
+            <Empty text={`couldn't reach saved data: ${cloudPositions.error}`} />
+          ) : positions.length ? (
             <table className="tbl">
               <thead>
                 <tr>
@@ -368,15 +402,17 @@ export function Predict() {
                   <th className="num">Max loss</th>
                   <th className="num">Max gain</th>
                   <th className="num">Delta ($/Δ1 spot)</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
-                {positions.map((p, i) => {
+                {positions.map((item) => {
+                  const p = item.data
                   const sigma = pricingVol(p.days)
                   const callDelta = spot > 0 ? binaryDelta(spot, p.strike, sigma, p.days, p.isCall) : 0
                   const posDelta = (p.side === 'YES' ? callDelta : -callDelta) * p.size
                   return (
-                    <tr key={i}>
+                    <tr key={item.id}>
                       <td>{p.market}</td>
                       <td>
                         <Tag tone={p.side === 'YES' ? 'live' : 'warn'}>{p.side}</Tag>
@@ -386,6 +422,11 @@ export function Predict() {
                       <td className="num tone-down">-${(p.price * p.size).toFixed(0)}</td>
                       <td className="num tone-up">+${((1 - p.price) * p.size).toFixed(0)}</td>
                       <td className={`num tone-${posDelta >= 0 ? 'up' : 'down'}`}>{posDelta.toFixed(2)}</td>
+                      <td>
+                        <button className="btn ghost" onClick={() => closePosition(item.id)}>
+                          close
+                        </button>
+                      </td>
                     </tr>
                   )
                 })}
