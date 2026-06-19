@@ -42,12 +42,13 @@ body { background: var(--bg); color: var(--text); font-size: 13.5px; }
 .nav-item.active { background: var(--panel2); color: var(--accent); font-weight: 600; }
 .nav-item .ico { width: 18px; text-align: center; opacity: 0.9; }
 .sidebar-footer { margin-top: auto; padding: 10px; font-size: 10.5px; color: var(--muted); line-height: 1.5; }
+.sidebar-wallet { margin: 14px 10px 0; }
 
 /* Collapse to an icon-only rail between the 1200px minimum viewport and
    1400px; full labels return above that. */
 @media (max-width: 1399px) {
   .sidebar { width: 56px; min-width: 56px; padding: 14px 6px; align-items: center; }
-  .logo, .nav-section, .sidebar-footer, .nav-item .label { display: none; }
+  .logo, .nav-section, .sidebar-footer, .sidebar-wallet, .nav-item .label { display: none; }
   .nav-item { justify-content: center; padding: 9px 0; }
   .nav-item .ico { width: auto; font-size: 17px; }
 }

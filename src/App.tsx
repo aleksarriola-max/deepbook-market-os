@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, Component, type ErrorInfo, type JSX, type ReactNode } from 'react'
-import { SessionProvider } from './lib/session'
+import { SessionProvider, useSession } from './lib/session'
 import { Dashboard } from './screens/Dashboard'
 import { Terminal } from './screens/Terminal'
 import { StrategyBuilder } from './screens/StrategyBuilder'
@@ -10,6 +10,8 @@ import { Predict } from './screens/Predict'
 import { Structured } from './screens/Structured'
 import { Portfolio } from './screens/Portfolio'
 import { BuilderConsole } from './screens/BuilderConsole'
+
+const WALLET_STORAGE_KEY = 'dbmos:wallet'
 
 type ScreenId =
   | 'dashboard'
@@ -99,6 +101,33 @@ const SCREENS: Record<ScreenId, () => JSX.Element> = {
   builder: BuilderConsole,
 }
 
+function WalletField() {
+  const { address, setAddress } = useSession()
+
+  useEffect(() => {
+    const saved = localStorage.getItem(WALLET_STORAGE_KEY)
+    if (saved) setAddress(saved)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  return (
+    <div className="sidebar-wallet">
+      <label className="fld">
+        wallet (for saved data)
+        <input
+          type="text"
+          placeholder="0x…"
+          value={address}
+          onChange={(e) => {
+            setAddress(e.target.value)
+            localStorage.setItem(WALLET_STORAGE_KEY, e.target.value)
+          }}
+        />
+      </label>
+    </div>
+  )
+}
+
 export default function App() {
   const [screen, setScreen] = useState<ScreenId>('dashboard')
   const awaitingGoto = useRef(false)
@@ -161,6 +190,7 @@ export default function App() {
               ))}
             </div>
           ))}
+          <WalletField />
           <div className="sidebar-footer">
             Built on DeepBookV3 · Spot + Margin + Predict
             <br />
