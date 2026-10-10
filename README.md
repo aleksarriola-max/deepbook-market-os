@@ -19,6 +19,18 @@ Predict positions — is a single Supabase table the browser talks to directly
 (see [Cloud persistence](#cloud-persistence-optional) below); nothing else in
 the app depends on it.
 
+## When I'd distrust it
+
+The numbers here are computed from live mainnet data, but several are optimistic by construction:
+
+- **The ladder backtest assumes perfect fills.** A rung counts as fully filled the moment price touches it. Real limit orders wait in a queue and may fill partly or not at all, so fill rates are an upper bound.
+- **Improvement is measured only when something fills.** Resting orders tend to fill when price moves against you (adverse selection), and windows with no fill are left out of the improvement figure, which flatters it.
+- **Backtest windows overlap**, so the sample is smaller than the window count suggests, and fees on the ladder side aren't modeled.
+- **Thin pools give noisy estimates.** Touch probabilities, Kyle's lambda and TCA come from each pool's own recent history; on a pool with little trading they can swing a lot between refreshes.
+- **Anything tagged `SIMULATED` is not market data.** Predict and Structured prices use a lognormal stand-in for the real oracle, and vault figures are illustrative.
+
+**The safeguard I'd add:** a queue-aware fill model and walk-forward backtests that report results with and without fees.
+
 ## Quick start
 
 ```bash
