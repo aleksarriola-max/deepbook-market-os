@@ -1,5 +1,10 @@
 # DeepBook Market OS
 
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-GitHub%20Pages-222222?logo=githubpages&logoColor=white)](https://aleksarriola-max.github.io/deepbook-market-os/)
+[![Deploy](https://github.com/aleksarriola-max/deepbook-market-os/actions/workflows/deploy.yml/badge.svg)](https://github.com/aleksarriola-max/deepbook-market-os/actions/workflows/deploy.yml)
+[![TypeScript](https://img.shields.io/badge/TypeScript-React%20%2B%20Vite-3178C6?logo=typescript&logoColor=white)](src/)
+[![Sui](https://img.shields.io/badge/Sui-DeepBookV3%20mainnet-4DA2FF?logo=sui&logoColor=white)](https://deepbook-indexer.mainnet.mystenlabs.com)
+
 **Live: https://aleksarriola-max.github.io/deepbook-market-os/**
 
 A builder console for DeepBookV3 on Sui — one operating layer over Spot, Margin
